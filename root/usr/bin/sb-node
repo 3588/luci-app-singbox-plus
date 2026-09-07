@@ -1,0 +1,304 @@
+#!/usr/bin/lua
+local json = require "luci.jsonc"
+local fs = require "nixio.fs"
+
+local CONFIG_PATH = "/etc/sing-box/config.json"
+local BACKUP_PATH = "/etc/sing-box/config.json.bak"
+
+local function url_decode(str)
+    str = string.gsub(str, "+", " ")
+    str = string.gsub(str, "%%(%x%x)", function(h)
+        return string.char(tonumber(h, 16))
+    end)
+    return str
+end
+
+local function parse_query(q)
+    local params = {}
+    if q and q ~= "" then
+        for k, v in q:gmatch("([^&=]+)=([^&=]*)") do
+            params[k] = url_decode(v)
+        end
+    end
+    return params
+end
+
+local function parse_vless(url)
+    local uuid, host, port, query, tag = url:match("^vless://([^@]+)@([^:/?#]+):?(%d*)%??([^#]*)#?(.*)$")
+    if not uuid or not host then return nil, "Invalid vless link format" end
+
+    port = tonumber(port) or 443
+    tag = (tag and tag ~= "") and url_decode(tag) or (host .. ":" .. tostring(port))
+    local params = parse_query(query)
+
+    local sni = (params["sni"] and params["sni"] ~= "") and params["sni"] or host
+    local ws_host = (params["host"] and params["host"] ~= "") and params["host"] or host
+    local ws_path = params["path"] or "/vless"
+    local is_tls = (params["security"] == "tls")
+    local is_insecure = (params["allowInsecure"] == "true" or params["allowInsecure"] == "1")
+
+    local connect_server = host
+    if host:find("trycloudflare%.com$") then
+        connect_server = "104.16.231.132"
+    end
+
+    local ob = {
+        type = "vless",
+        tag = tag,
+        server = connect_server,
+        server_port = port,
+        uuid = uuid,
+        packet_encoding = params["packetEncoding"] or "xudp"
+    }
+
+    if is_tls then
+        ob.tls = {
+            enabled = true,
+            server_name = sni,
+            utls = { enabled = true, fingerprint = "chrome" }
+        }
+        if is_insecure then ob.tls.insecure = true end
+    end
+
+    local net_type = params["type"] or "ws"
+    if net_type == "ws" then
+        ob.transport = {
+            type = "ws",
+            path = ws_path,
+            headers = { Host = ws_host }
+        }
+    end
+    return ob
+end
+
+local function parse_tuic(url)
+    -- tuic://uuid:password@host:port?query#name
+    local uuid, pass, host, port, query, tag = url:match("^tuic://([^:]+):([^@]+)@([^:/?#]+):?(%d*)%??([^#]*)#?(.*)$")
+    if not uuid or not host then return nil, "Invalid tuic link format" end
+
+    port = tonumber(port) or 443
+    tag = (tag and tag ~= "") and url_decode(tag) or ("tuic-" .. host .. ":" .. tostring(port))
+    local params = parse_query(query)
+
+    local sni = (params["sni"] and params["sni"] ~= "") and params["sni"] or host
+    local is_insecure = (params["allowInsecure"] == "true" or params["allowInsecure"] == "1")
+    local cc = params["congestion_control"] or "bbr"
+    local udp_mode = params["udp_relay_mode"] or "native"
+
+    local alpn = {}
+    if params["alpn"] and params["alpn"] ~= "" then
+        for a in params["alpn"]:gmatch("([^,]+)") do table.insert(alpn, a) end
+    else
+        table.insert(alpn, "h3")
+    end
+
+    local ob = {
+        type = "tuic",
+        tag = tag,
+        server = host,
+        server_port = port,
+        uuid = uuid,
+        password = pass,
+        congestion_control = cc,
+        udp_relay_mode = udp_mode,
+        tls = {
+            enabled = true,
+            server_name = sni,
+            alpn = alpn,
+            insecure = is_insecure
+        }
+    }
+    return ob
+end
+
+local function parse_hysteria2(url)
+    -- hysteria2://password@host:port?query#name
+    local pass, host, port, query, tag = url:match("^hysteria2://([^@]+)@([^:/?#]+):?(%d*)%??([^#]*)#?(.*)$")
+    if not pass or not host then
+        -- try hy2:// format
+        pass, host, port, query, tag = url:match("^hy2://([^@]+)@([^:/?#]+):?(%d*)%??([^#]*)#?(.*)$")
+    end
+    if not pass or not host then return nil, "Invalid hysteria2 link format" end
+
+    port = tonumber(port) or 443
+    tag = (tag and tag ~= "") and url_decode(tag) or ("hy2-" .. host .. ":" .. tostring(port))
+    local params = parse_query(query)
+
+    local sni = (params["sni"] and params["sni"] ~= "") and params["sni"] or host
+    local is_insecure = (params["allowInsecure"] == "true" or params["allowInsecure"] == "1")
+
+    local alpn = {}
+    if params["alpn"] and params["alpn"] ~= "" then
+        for a in params["alpn"]:gmatch("([^,]+)") do table.insert(alpn, a) end
+    else
+        table.insert(alpn, "h3")
+    end
+
+    local ob = {
+        type = "hysteria2",
+        tag = tag,
+        server = host,
+        server_port = port,
+        password = pass,
+        tls = {
+            enabled = true,
+            server_name = sni,
+            alpn = alpn,
+            insecure = is_insecure
+        }
+    }
+    return ob
+end
+
+local function parse_link(url)
+    if url:match("^vless://") then
+        return parse_vless(url)
+    elseif url:match("^tuic://") then
+        return parse_tuic(url)
+    elseif url:match("^hysteria2://") or url:match("^hy2://") then
+        return parse_hysteria2(url)
+    else
+        return nil, "Unsupported protocol: only vless, tuic, hysteria2 are supported"
+    end
+end
+
+local function read_config()
+    local content = fs.readfile(CONFIG_PATH)
+    if not content then return nil, "Cannot read config" end
+    return json.parse(content)
+end
+
+local function write_config(cfg)
+    local old = fs.readfile(CONFIG_PATH)
+    if old then fs.writefile(BACKUP_PATH, old) end
+
+    local text = json.stringify(cfg, true)
+    fs.writefile(CONFIG_PATH, text)
+
+    local res = os.execute("/usr/bin/sing-box check -c " .. CONFIG_PATH .. " >/dev/null 2>&1")
+    if res ~= 0 then
+        if old then fs.writefile(CONFIG_PATH, old) end
+        return false, "sing-box check failed, configuration restored."
+    end
+
+    os.execute("/etc/init.d/sing-box restart >/dev/null 2>&1")
+    return true
+end
+
+local action = arg[1]
+
+if action == "list" then
+    local cfg = read_config()
+    if not cfg then
+        print(json.stringify({success=false, error="Cannot read config"}))
+        return
+    end
+    local nodes = {}
+    for _, ob in ipairs(cfg.outbounds or {}) do
+        if ob.type == "vless" or ob.type == "tuic" or ob.type == "hysteria2" or ob.type == "vmess" or ob.type == "trojan" or ob.type == "shadowsocks" then
+            table.insert(nodes, {
+                tag = ob.tag,
+                type = ob.type,
+                server = ob.server,
+                port = ob.server_port,
+                uuid = ob.uuid,
+                tls = ob.tls and ob.tls.enabled or false,
+                sni = ob.tls and ob.tls.server_name or "",
+                path = ob.transport and ob.transport.path or "",
+                host = ob.transport and ob.transport.headers and ob.transport.headers.Host or ""
+            })
+        end
+    end
+    print(json.stringify({success=true, nodes=nodes}))
+
+elseif action == "add" then
+    local link = arg[2]
+    local new_ob, err = parse_link(link)
+    if not new_ob then
+        print(json.stringify({success=false, error=err}))
+        return
+    end
+
+    local cfg, read_err = read_config()
+    if not cfg then
+        print(json.stringify({success=false, error=read_err}))
+        return
+    end
+
+    -- Add direct IP rule if needed
+    for _, r in ipairs(cfg.route and cfg.route.rules or {}) do
+        if r.ip_cidr and new_ob.server:match("^%d+%.%d+%.%d+%.%d+$") then
+            local cidr = new_ob.server .. "/32"
+            local has = false
+            for _, c in ipairs(r.ip_cidr) do if c == cidr then has = true break end end
+            if not has then table.insert(r.ip_cidr, 1, cidr) end
+        end
+    end
+
+    local new_outbounds = {}
+    for _, ob in ipairs(cfg.outbounds or {}) do
+        if ob.tag ~= new_ob.tag then
+            table.insert(new_outbounds, ob)
+        end
+    end
+
+    for _, ob in ipairs(new_outbounds) do
+        if ob.type == "selector" and ob.tag == "NodeSelect" then
+            local exists = false
+            for _, t in ipairs(ob.outbounds or {}) do if t == new_ob.tag then exists = true; break end end
+            if not exists then table.insert(ob.outbounds, new_ob.tag) end
+        elseif ob.type == "urltest" and ob.tag == "Auto-Best" then
+            local exists = false
+            for _, t in ipairs(ob.outbounds or {}) do if t == new_ob.tag then exists = true; break end end
+            if not exists then table.insert(ob.outbounds, new_ob.tag) end
+        end
+    end
+
+    local inserted = false
+    for i, ob in ipairs(new_outbounds) do
+        if ob.type == "direct" or ob.type == "block" then
+            table.insert(new_outbounds, i, new_ob)
+            inserted = true
+            break
+        end
+    end
+    if not inserted then table.insert(new_outbounds, new_ob) end
+
+    cfg.outbounds = new_outbounds
+    local ok, save_err = write_config(cfg)
+    if ok then
+        print(json.stringify({success=true, tag=new_ob.tag}))
+    else
+        print(json.stringify({success=false, error=save_err}))
+    end
+
+elseif action == "del" then
+    local tag = arg[2]
+    local cfg, read_err = read_config()
+    if not cfg then
+        print(json.stringify({success=false, error=read_err}))
+        return
+    end
+
+    local new_outbounds = {}
+    for _, ob in ipairs(cfg.outbounds or {}) do
+        if ob.tag ~= tag then
+            if ob.type == "selector" or ob.type == "urltest" then
+                local filtered_tags = {}
+                for _, t in ipairs(ob.outbounds or {}) do
+                    if t ~= tag then table.insert(filtered_tags, t) end
+                end
+                ob.outbounds = filtered_tags
+            end
+            table.insert(new_outbounds, ob)
+        end
+    end
+    cfg.outbounds = new_outbounds
+
+    local ok, save_err = write_config(cfg)
+    if ok then
+        print(json.stringify({success=true, tag=tag}))
+    else
+        print(json.stringify({success=false, error=save_err}))
+    end
+end

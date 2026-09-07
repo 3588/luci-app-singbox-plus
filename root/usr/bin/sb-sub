@@ -1,0 +1,290 @@
+#!/usr/bin/lua
+local json = require "luci.jsonc"
+local fs = require "nixio.fs"
+
+local SUB_CONFIG_PATH = "/etc/sing-box/subscriptions.json"
+local CONFIG_PATH = "/etc/sing-box/config.json"
+local BACKUP_PATH = "/etc/sing-box/config.json.bak"
+
+local function read_file(path)
+    return fs.readfile(path)
+end
+
+local function write_file(path, content)
+    return fs.writefile(path, content)
+end
+
+local function url_decode(str)
+    str = string.gsub(str, "+", " ")
+    str = string.gsub(str, "%%(%x%x)", function(h)
+        return string.char(tonumber(h, 16))
+    end)
+    return str
+end
+
+local function parse_query(q)
+    local params = {}
+    if q and q ~= "" then
+        for k, v in q:gmatch("([^&=]+)=([^&=]*)") do
+            params[k] = url_decode(v)
+        end
+    end
+    return params
+end
+
+local function parse_vless(url)
+    local uuid, host, port, query, tag = url:match("^vless://([^@]+)@([^:/?#]+):?(%d*)%??([^#]*)#?(.*)$")
+    if not uuid or not host then return nil, "Invalid vless" end
+
+    port = tonumber(port) or 443
+    tag = (tag and tag ~= "") and url_decode(tag) or (host .. ":" .. tostring(port))
+    local params = parse_query(query)
+
+    local sni = (params["sni"] and params["sni"] ~= "") and params["sni"] or host
+    local ws_host = (params["host"] and params["host"] ~= "") and params["host"] or host
+    local ws_path = params["path"] or "/vless"
+    local is_tls = (params["security"] == "tls")
+    local is_insecure = (params["allowInsecure"] == "true" or params["allowInsecure"] == "1")
+
+    local connect_server = host
+    if host:find("trycloudflare%.com$") then
+        connect_server = "104.16.231.132"
+    end
+
+    local ob = {
+        type = "vless",
+        tag = tag,
+        server = connect_server,
+        server_port = port,
+        uuid = uuid,
+        packet_encoding = params["packetEncoding"] or "xudp"
+    }
+
+    if is_tls then
+        ob.tls = {
+            enabled = true,
+            server_name = sni,
+            utls = { enabled = true, fingerprint = "chrome" }
+        }
+        if is_insecure then ob.tls.insecure = true end
+    end
+
+    local net_type = params["type"] or "ws"
+    if net_type == "ws" then
+        ob.transport = {
+            type = "ws",
+            path = ws_path,
+            headers = { Host = ws_host }
+        }
+    end
+    return ob
+end
+
+local function fetch_url(url)
+    local esc_url = url:gsub("'", "'\\''")
+    -- Try direct first
+    local cmd = "curl -s -k -L --max-time 6 '" .. esc_url .. "'"
+    local p = io.popen(cmd)
+    local res = p:read("*all") or ""
+    p:close()
+
+    -- If failed, try via local proxy 1080
+    if #res < 10 then
+        cmd = "curl -s -k -L -x socks5h://127.0.0.1:1080 --max-time 8 '" .. esc_url .. "'"
+        p = io.popen(cmd)
+        res = p:read("*all") or ""
+        p:close()
+    end
+    return res
+end
+
+local function decode_subscription(raw_text)
+    raw_text = raw_text:gsub("%s+", "")
+    local p = io.popen("echo '" .. raw_text:gsub("'", "'\\''") .. "' | base64 -d 2>/dev/null")
+    local decoded = p:read("*all") or ""
+    p:close()
+
+    local lines = {}
+    local target = (#decoded > 10 and decoded:find("://")) and decoded or raw_text
+    for line in string.gmatch(target, "[^\r\n]+") do
+        if line:find("://") then
+            table.insert(lines, line)
+        end
+    end
+    return lines
+end
+
+local function get_subscriptions()
+    local c = read_file(SUB_CONFIG_PATH)
+    if not c then return {} end
+    return json.parse(c) or {}
+end
+
+local function save_subscriptions(subs)
+    return write_file(SUB_CONFIG_PATH, json.stringify(subs, true))
+end
+
+local action = arg[1]
+
+if action == "list" then
+    local subs = get_subscriptions()
+    print(json.stringify({ success = true, subscriptions = subs }))
+
+elseif action == "add" then
+    local name = arg[2]
+    local url = arg[3]
+    if not name or not url then
+        print(json.stringify({ success = false, error = "Usage: sb-sub add <name> <url>" }))
+        return
+    end
+    local subs = get_subscriptions()
+    local updated = false
+    for _, s in ipairs(subs) do
+        if s.name == name or s.url == url then
+            s.name = name
+            s.url = url
+            updated = true
+            break
+        end
+    end
+    if not updated then
+        table.insert(subs, { name = name, url = url, enabled = true, last_update = "" })
+    end
+    save_subscriptions(subs)
+    print(json.stringify({ success = true, name = name }))
+
+elseif action == "del" then
+    local name = arg[2]
+    local subs = get_subscriptions()
+    local new_subs = {}
+    for _, s in ipairs(subs) do
+        if s.name ~= name and s.url ~= name then
+            table.insert(new_subs, s)
+        end
+    end
+    save_subscriptions(new_subs)
+    print(json.stringify({ success = true, name = name }))
+
+elseif action == "update" then
+    local subs = get_subscriptions()
+    if #subs == 0 then
+        print(json.stringify({ success = false, error = "No subscriptions configured" }))
+        return
+    end
+
+    local cfg_content = read_file(CONFIG_PATH)
+    if not cfg_content then
+        print(json.stringify({ success = false, error = "Cannot read sing-box config" }))
+        return
+    end
+    local cfg = json.parse(cfg_content)
+
+    -- Preserve manually configured backup nodes (hysteria2, tuic, or custom backup tags)
+    local preserved_outbounds = {}
+    for _, ob in ipairs(cfg.outbounds or {}) do
+        if ob.type == "hysteria2" or ob.type == "tuic" or (ob.tag and (ob.tag:find("backup") or ob.tag:find("备用"))) then
+            table.insert(preserved_outbounds, ob)
+        end
+    end
+
+    local fetched_nodes = {}
+    local sub_results = {}
+
+    for _, s in ipairs(subs) do
+        if s.enabled ~= false then
+            local raw = fetch_url(s.url)
+            local lines = decode_subscription(raw)
+            local count = 0
+            for _, link in ipairs(lines) do
+                if link:match("^vless://") then
+                    local ob = parse_vless(link)
+                    if ob then
+                        if s.name and s.name ~= "" and #lines == 1 then
+                            ob.tag = s.name
+                        end
+                        table.insert(fetched_nodes, ob)
+                        count = count + 1
+                    end
+                end
+            end
+            s.last_update = os.date("%Y-%m-%d %H:%M:%S")
+            s.node_count = count
+            table.insert(sub_results, { name = s.name, count = count, success = (count > 0) })
+        end
+    end
+
+    save_subscriptions(subs)
+
+    if #fetched_nodes == 0 then
+        print(json.stringify({ success = false, error = "Failed to fetch any nodes from subscriptions", results = sub_results }))
+        return
+    end
+
+    -- Rebuild outbounds
+    local vless_tags = {}
+    local all_proxy_tags = {}
+
+    for _, ob in ipairs(fetched_nodes) do
+        table.insert(vless_tags, ob.tag)
+        table.insert(all_proxy_tags, ob.tag)
+    end
+    for _, ob in ipairs(preserved_outbounds) do
+        table.insert(all_proxy_tags, ob.tag)
+    end
+
+    local new_outbounds = {
+        {
+            type = "selector",
+            tag = "NodeSelect",
+            outbounds = { "VLESS-自动优选" },
+            default = vless_tags[1] or "VLESS-自动优选"
+        },
+        {
+            type = "urltest",
+            tag = "VLESS-自动优选",
+            outbounds = vless_tags,
+            url = "https://www.google.com/generate_204",
+            interval = "3m",
+            tolerance = 50
+        },
+        {
+            type = "urltest",
+            tag = "Auto-Best",
+            outbounds = all_proxy_tags,
+            url = "https://www.google.com/generate_204",
+            interval = "3m",
+            tolerance = 50
+        }
+    }
+
+    for _, t in ipairs(all_proxy_tags) do
+        table.insert(new_outbounds[1].outbounds, t)
+    end
+    for _, ob in ipairs(fetched_nodes) do
+        table.insert(new_outbounds, ob)
+    end
+    for _, ob in ipairs(preserved_outbounds) do
+        table.insert(new_outbounds, ob)
+    end
+    table.insert(new_outbounds, { type = "direct", tag = "direct", bind_interface = "eth3" })
+    table.insert(new_outbounds, { type = "block", tag = "block" })
+
+    cfg.outbounds = new_outbounds
+
+    local old_cfg = read_file(CONFIG_PATH)
+    if old_cfg then write_file(BACKUP_PATH, old_cfg) end
+
+    write_file(CONFIG_PATH, json.stringify(cfg, true))
+
+    local res = os.execute("/usr/bin/sing-box check -c " .. CONFIG_PATH .. " >/dev/null 2>&1")
+    if res ~= 0 then
+        if old_cfg then write_file(CONFIG_PATH, old_cfg) end
+        print(json.stringify({ success = false, error = "sing-box check failed after update, rolled back" }))
+        return
+    end
+
+    os.execute("/etc/init.d/sing-box restart >/dev/null 2>&1")
+    print(json.stringify({ success = true, node_count = #fetched_nodes, results = sub_results }))
+else
+    print("Usage: sb-sub [list|add <name> <url>|del <name>|update]")
+end

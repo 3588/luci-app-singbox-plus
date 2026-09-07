@@ -1,0 +1,270 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "NodeSelect",
+      "outbounds": [
+        "VLESS-自动优选",
+        "示例-VLESS节点1",
+        "示例-VLESS节点2",
+        "示例-Hysteria2备用",
+        "示例-TUIC备用"
+      ],
+      "default": "示例-VLESS节点1"
+    },
+    {
+      "type": "urltest",
+      "tag": "VLESS-自动优选",
+      "outbounds": [
+        "示例-VLESS节点1",
+        "示例-VLESS节点2"
+      ],
+      "url": "https://www.google.com/generate_204",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "urltest",
+      "tag": "Auto-Best",
+      "outbounds": [
+        "示例-VLESS节点1",
+        "示例-VLESS节点2",
+        "示例-Hysteria2备用",
+        "示例-TUIC备用"
+      ],
+      "url": "https://www.google.com/generate_204",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "vless",
+      "tag": "示例-VLESS节点1",
+      "server": "198.51.100.1",
+      "server_port": 443,
+      "uuid": "00000000-0000-0000-0000-000000000001",
+      "packet_encoding": "xudp",
+      "transport": {
+        "type": "ws",
+        "path": "/vless",
+        "headers": {
+          "Host": "sample-tunnel.example.com"
+        }
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "sample-tunnel.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "示例-VLESS节点2",
+      "server": "198.51.100.1",
+      "server_port": 443,
+      "uuid": "00000000-0000-0000-0000-000000000002",
+      "packet_encoding": "xudp",
+      "transport": {
+        "type": "ws",
+        "path": "/ws",
+        "headers": {
+          "Host": "sample-tunnel2.example.com"
+        }
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "sample-tunnel2.example.com",
+        "insecure": true,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "示例-Hysteria2备用",
+      "server": "198.51.100.2",
+      "server_port": 44300,
+      "password": "your_password_here",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.bing.com",
+        "insecure": true,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "示例-TUIC备用",
+      "server": "198.51.100.2",
+      "server_port": 15000,
+      "uuid": "00000000-0000-0000-0000-000000000003",
+      "password": "your_password_here",
+      "congestion_control": "bbr",
+      "udp_relay_mode": "native",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.bing.com",
+        "insecure": true,
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "direct",
+      "bind_interface": "eth3",
+      "tag": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    }
+  ],
+  "log": {
+    "timestamp": true,
+    "level": "info"
+  },
+  "dns": {
+    "rules": [
+      {
+        "server": "dns-remote",
+        "rule_set": "geosite-gfw"
+      }
+    ],
+    "servers": [
+      {
+        "type": "udp",
+        "server": "223.5.5.5",
+        "detour": "direct",
+        "server_port": 53,
+        "tag": "dns-local"
+      },
+      {
+        "type": "tcp",
+        "server": "8.8.8.8",
+        "detour": "NodeSelect",
+        "server_port": 53,
+        "tag": "dns-remote"
+      }
+    ],
+    "reverse_mapping": true,
+    "strategy": "prefer_ipv4",
+    "final": "dns-local"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_ui": "/opt/ui",
+      "external_controller": "0.0.0.0:9090"
+    }
+  },
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "action": "hijack-dns",
+        "port": 53
+      },
+      {
+        "outbound": "direct",
+        "ip_cidr": [
+          "198.51.100.0/24",
+          "192.168.0.0/16",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "127.0.0.0/8",
+          "224.0.0.0/4",
+          "255.255.255.255/32"
+        ]
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "outbound": "NodeSelect",
+        "rule_set": [
+          "geosite-gfw",
+          "geoip-telegram",
+          "geoip-google",
+          "geoip-twitter"
+        ]
+      },
+      {
+        "network": "tcp",
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "outbound": "direct"
+      }
+    ],
+    "default_interface": "eth3",
+    "rule_set": [
+      {
+        "path": "/opt/sing-box/geosite-gfw.srs",
+        "type": "local",
+        "format": "binary",
+        "tag": "geosite-gfw"
+      },
+      {
+        "path": "/opt/sing-box/geoip-telegram.srs",
+        "type": "local",
+        "format": "binary",
+        "tag": "geoip-telegram"
+      },
+      {
+        "path": "/opt/sing-box/geoip-google.srs",
+        "type": "local",
+        "format": "binary",
+        "tag": "geoip-google"
+      },
+      {
+        "path": "/opt/sing-box/geoip-twitter.srs",
+        "type": "local",
+        "format": "binary",
+        "tag": "geoip-twitter"
+      }
+    ],
+    "auto_detect_interface": false,
+    "default_domain_resolver": "dns-local"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "auto_route": true,
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "strict_route": false,
+      "stack": "system",
+      "interface_name": "tun0",
+      "tag": "tun-in"
+    },
+    {
+      "listen": "0.0.0.0",
+      "type": "mixed",
+      "listen_port": 1080,
+      "tag": "mixed-in"
+    },
+    {
+      "type": "direct",
+      "override_address": "8.8.8.8",
+      "override_port": 53,
+      "listen": "127.0.0.1",
+      "listen_port": 6053,
+      "tag": "dns-in"
+    }
+  ]
+}

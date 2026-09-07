@@ -1,0 +1,568 @@
+<%+header%>
+<div class="cbi-map" id="sb-app">
+	<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+		<h2 name="content" style="margin: 0;" data-i18n="title">Sing-Box 代理网关控制台</h2>
+		<div style="display: flex; gap: 6px; align-items: center;">
+			<span style="font-size: 13px; color: #64748b;" data-i18n="lang_label">🌐 语言 / Language:</span>
+			<button class="cbi-button" onclick="setLang('zh')" id="btn-lang-zh" style="padding: 2px 8px; font-size: 12px; font-weight: bold; cursor: pointer;">中文</button>
+			<button class="cbi-button" onclick="setLang('en')" id="btn-lang-en" style="padding: 2px 8px; font-size: 12px; cursor: pointer;">English</button>
+		</div>
+	</div>
+	<div class="cbi-map-descr" data-i18n="desc">当前运行模式：透明代理 (TUN) + GFW 模式。默认优先新加坡 VLESS 节点，备份线路自动待命。</div>
+	
+	<!-- 顶部控制条 -->
+	<div class="cbi-section" style="margin-bottom: 15px; padding: 12px 18px; background: #fff; border: 1px solid #d9d9d9; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+		<div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+			<div style="display: flex; align-items: center; gap: 12px;">
+				<span style="font-weight: bold; font-size: 14px;" data-i18n="status_label">核心状态:</span>
+				<span id="sb-status" style="display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 13px; background: #e0e0e0; color: #333;" data-i18n="status_checking">检测中...</span>
+				<span style="color: #666; font-size: 13px;" data-i18n="cron_label">定时订阅: 每2小时自动同步</span>
+			</div>
+			<div style="display: flex; gap: 8px;">
+				<button class="cbi-button cbi-button-apply" onclick="serviceAction('restart')" style="cursor: pointer; padding: 4px 12px;" data-i18n="btn_restart">重启服务</button>
+				<button class="cbi-button cbi-button-reset" onclick="serviceAction('stop')" style="cursor: pointer; padding: 4px 12px;" data-i18n="btn_stop">停止</button>
+				<button class="cbi-button cbi-button-save" onclick="serviceAction('start')" style="cursor: pointer; padding: 4px 12px;" data-i18n="btn_start">启动</button>
+				<a class="cbi-button cbi-button-link" href="/singbox/" target="_blank" style="padding: 4px 12px; background: #0072c6; color: white; text-decoration: none; border-radius: 3px; font-weight: bold;" data-i18n="btn_open_dash">新窗口打开仪表盘 ↗</a>
+			</div>
+		</div>
+	</div>
+
+	<!-- 选项卡导航 -->
+	<div style="display: flex; border-bottom: 2px solid #0072c6; margin-bottom: 15px; gap: 4px;">
+		<button id="tab-btn-subs" onclick="switchTab('subs')" style="padding: 9px 20px; font-size: 14px; font-weight: bold; cursor: pointer; border: 1px solid #0072c6; border-bottom: none; border-radius: 5px 5px 0 0; background: #0072c6; color: #fff;" data-i18n="tab_subs">⚡ 订阅管理</button>
+		<button id="tab-btn-nodes" onclick="switchTab('nodes')" style="padding: 9px 20px; font-size: 14px; font-weight: bold; cursor: pointer; border: 1px solid #d9d9d9; border-bottom: none; border-radius: 5px 5px 0 0; background: #f5f5f5; color: #555;" data-i18n="tab_nodes">📋 节点列表与手动添加</button>
+		<button id="tab-btn-dashboard" onclick="switchTab('dashboard')" style="padding: 9px 20px; font-size: 14px; font-weight: bold; cursor: pointer; border: 1px solid #d9d9d9; border-bottom: none; border-radius: 5px 5px 0 0; background: #f5f5f5; color: #555;" data-i18n="tab_dash">📊 仪表盘与测速 (Dashboard)</button>
+	</div>
+
+	<!-- Tab 1: 订阅管理 -->
+	<div id="tab-content-subs">
+		<div class="cbi-section" style="padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 16px;">
+			<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+				<h3 style="margin: 0; font-size: 15px; color: #1e293b;" data-i18n="sub_list_title">🔄 节点订阅列表</h3>
+				<div style="display: flex; gap: 8px; align-items: center;">
+					<button class="cbi-button cbi-button-apply" id="btn-sync-subs" onclick="updateSubs()" style="padding: 6px 16px; font-size: 13px; font-weight: bold; cursor: pointer;" data-i18n="btn_sync_now">立即同步所有订阅 🔄</button>
+					<span id="sub-msg" style="font-size: 13px; font-weight: bold;"></span>
+				</div>
+			</div>
+			<p style="color: #64748b; font-size: 13px; margin-bottom: 12px;" data-i18n="sub_desc">
+				系统已配置<strong>每 2 小时后台自动更新</strong>。当 Cloudflare 临时隧道切换新域名时，软路由将自动拉取并应用，无需手动维护。更新订阅时会自动保留您的 TUIC 与 Hysteria 2 备份节点。
+			</p>
+			
+			<div style="overflow-x: auto;">
+				<table class="cbi-section-table" style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
+					<thead>
+						<tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+							<th style="padding: 10px; width: 22%;" data-i18n="th_sub_name">订阅名称</th>
+							<th style="padding: 10px; width: 48%;" data-i18n="th_sub_url">订阅链接 (URL)</th>
+							<th style="padding: 10px; width: 18%;" data-i18n="th_sub_update">最后同步时间</th>
+							<th style="padding: 10px; width: 12%; text-align: center;" data-i18n="th_action">操作</th>
+						</tr>
+					</thead>
+					<tbody id="sub-list-body">
+						<tr><td colspan="4" style="padding: 15px; text-align: center; color: #888;" data-i18n="loading_subs">加载订阅中...</td></tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+
+		<div class="cbi-section" style="padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px;">
+			<h3 style="margin-top: 0; margin-bottom: 10px; font-size: 15px; color: #1e293b;" data-i18n="add_sub_title">➕ 添加新订阅</h3>
+			<div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+				<input type="text" id="new-sub-name" placeholder="订阅名称 (如: 新加坡节点01)" style="flex: 1; min-width: 160px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;" />
+				<input type="text" id="new-sub-url" placeholder="订阅链接 (https://...)" style="flex: 3; min-width: 260px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px;" />
+				<button class="cbi-button cbi-button-save" onclick="addSub()" style="padding: 7px 18px; font-size: 13px; font-weight: bold; cursor: pointer;" data-i18n="btn_add_sub">添加订阅</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Tab 2: 节点管理与添加 -->
+	<div id="tab-content-nodes" style="display: none;">
+		<div class="cbi-section" style="padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 16px;">
+			<h3 style="margin-top: 0; margin-bottom: 10px; font-size: 15px; color: #1e293b;" data-i18n="import_title">📥 手动粘贴单条/多条节点链接</h3>
+			<p style="color: #64748b; font-size: 13px; margin-bottom: 8px;" data-i18n="import_desc">
+				支持直接粘贴 <code>vless://</code>、<code>tuic://</code>、<code>hysteria2://</code> 格式链接。
+			</p>
+			<textarea id="import-links" rows="3" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-family: monospace; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px; resize: vertical;" placeholder="vless://... 或 tuic://... 或 hysteria2://..."></textarea>
+			<div style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between;">
+				<div>
+					<button class="cbi-button cbi-button-apply" onclick="importNodes()" id="btn-import" style="padding: 6px 18px; font-size: 13px; font-weight: bold; cursor: pointer;" data-i18n="btn_import">导入并生效</button>
+					<button class="cbi-button" onclick="document.getElementById('import-links').value='';" style="padding: 6px 12px; font-size: 13px; margin-left: 8px; cursor: pointer;" data-i18n="btn_clear">清空</button>
+				</div>
+				<span id="import-msg" style="font-size: 13px; font-weight: bold;"></span>
+			</div>
+		</div>
+
+		<div class="cbi-section" style="padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px;">
+			<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+				<h3 style="margin: 0; font-size: 15px; color: #1e293b;" data-i18n="node_list_title">📋 当前生效节点</h3>
+				<button class="cbi-button cbi-button-save" onclick="loadNodes()" style="cursor: pointer; padding: 4px 10px; font-size: 12px;" data-i18n="btn_refresh_nodes">刷新节点 🔄</button>
+			</div>
+			
+			<div style="overflow-x: auto;">
+				<table class="cbi-section-table" style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
+					<thead>
+						<tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+							<th style="padding: 10px; width: 22%;" data-i18n="th_node_name">节点名称</th>
+							<th style="padding: 10px; width: 12%;" data-i18n="th_proto">协议类型</th>
+							<th style="padding: 10px; width: 28%;" data-i18n="th_sni">连接域名 / SNI</th>
+							<th style="padding: 10px; width: 14%;" data-i18n="th_path">路径 (Path)</th>
+							<th style="padding: 10px; width: 14%;" data-i18n="th_server">出站 IP</th>
+							<th style="padding: 10px; width: 10%; text-align: center;" data-i18n="th_action">操作</th>
+						</tr>
+					</thead>
+					<tbody id="node-list-body">
+						<tr><td colspan="6" style="padding: 15px; text-align: center; color: #888;" data-i18n="loading_nodes">加载节点数据中...</td></tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<!-- Tab 3: 仪表盘 -->
+	<div id="tab-content-dashboard" style="display: none;">
+		<div class="cbi-section" style="border: 1px solid #ddd; border-radius: 6px; overflow: hidden; background: #fff;">
+			<iframe id="singbox-ui" style="width: 100%; height: 750px; border: none; display: block;"></iframe>
+		</div>
+	</div>
+</div>
+
+<script type="text/javascript">
+	var currentLang = localStorage.getItem('sb_lang') || 'zh';
+
+	var i18nData = {
+		zh: {
+			title: "Sing-Box 代理网关控制台",
+			desc: "当前运行模式：透明代理 (TUN) + GFW 模式。默认优先新加坡 VLESS 节点，备份线路自动待命。",
+			lang_label: "🌐 语言 / Language:",
+			status_label: "核心状态:",
+			status_checking: "检测中...",
+			status_running: "● 运行中 (Running)",
+			status_stopped: "● 未运行 (Stopped)",
+			cron_label: "定时订阅: 每2小时自动同步",
+			btn_restart: "重启服务",
+			btn_stop: "停止",
+			btn_start: "启动",
+			btn_open_dash: "新窗口打开仪表盘 ↗",
+			tab_subs: "⚡ 订阅管理",
+			tab_nodes: "📋 节点列表与手动添加",
+			tab_dash: "📊 仪表盘与测速 (Dashboard)",
+			sub_list_title: "🔄 节点订阅列表",
+			btn_sync_now: "立即同步所有订阅 🔄",
+			btn_syncing: "同步更新中...",
+			sub_desc: "系统已配置<strong>每 2 小时后台自动更新</strong>。当 Cloudflare 临时隧道切换新域名时，软路由将自动拉取并应用，无需手动维护。更新订阅时会自动保留您的 TUIC 与 Hysteria 2 备份节点。",
+			th_sub_name: "订阅名称",
+			th_sub_url: "订阅链接 (URL)",
+			th_sub_update: "最后同步时间",
+			th_action: "操作",
+			loading_subs: "加载订阅中...",
+			no_subs: "暂无订阅，请在下方添加。",
+			add_sub_title: "➕ 添加新订阅",
+			btn_add_sub: "添加订阅",
+			sub_name_ph: "订阅名称 (如: 新加坡节点01)",
+			sub_url_ph: "订阅链接 (https://...)",
+			import_title: "📥 手动粘贴单条/多条节点链接",
+			import_desc: "支持直接粘贴 <code>vless://</code>、<code>tuic://</code>、<code>hysteria2://</code> 格式链接。",
+			btn_import: "导入并生效",
+			btn_importing: "导入中...",
+			btn_clear: "清空",
+			node_list_title: "📋 当前生效节点",
+			btn_refresh_nodes: "刷新节点 🔄",
+			th_node_name: "节点名称",
+			th_proto: "协议类型",
+			th_sni: "连接域名 / SNI",
+			th_path: "路径 (Path)",
+			th_server: "出站 IP",
+			loading_nodes: "加载节点数据中...",
+			no_nodes: "暂无节点，请在上方添加或同步订阅。",
+			btn_del: "删除",
+			confirm_del_node: "确定要删除节点 ",
+			confirm_del_sub: "确定删除订阅 ",
+			prompt_input_sub: "请输入订阅链接！",
+			prompt_input_node: "请先粘贴节点链接！",
+			success_import: "✔ 导入成功！已保存并生效。",
+			fail_import: "❌ 导入失败",
+			success_sync: "✔ 订阅更新成功！已同步 ",
+			fail_sync: "❌ 更新失败: ",
+			status_pending: "待更新"
+		},
+		en: {
+			title: "Sing-Box Proxy Gateway Console",
+			desc: "Current Mode: Transparent Proxy (TUN) + GFW Rules. Primary VLESS routes active, fallback routes standby.",
+			lang_label: "🌐 Language / 语言:",
+			status_label: "Core Status:",
+			status_checking: "Checking...",
+			status_running: "● Running",
+			status_stopped: "● Stopped",
+			cron_label: "Auto Sync: Every 2 hours",
+			btn_restart: "Restart Service",
+			btn_stop: "Stop",
+			btn_start: "Start",
+			btn_open_dash: "Open Dashboard in New Tab ↗",
+			tab_subs: "⚡ Subscriptions",
+			tab_nodes: "📋 Node Manager & Manual Add",
+			tab_dash: "📊 Dashboard & Benchmarks",
+			sub_list_title: "🔄 Subscription Feeds",
+			btn_sync_now: "Sync All Subscriptions 🔄",
+			btn_syncing: "Synchronizing...",
+			sub_desc: "Scheduled to <strong>auto-sync every 2 hours</strong> in the background. Ephemeral Cloudflare tunnel domain resets are detected and updated automatically without downtime. Custom TUIC and Hysteria 2 fallback nodes are strictly preserved.",
+			th_sub_name: "Name",
+			th_sub_url: "Subscription URL",
+			th_sub_update: "Last Updated",
+			th_action: "Action",
+			loading_subs: "Loading subscriptions...",
+			no_subs: "No subscriptions configured. Add one below.",
+			add_sub_title: "➕ Add New Subscription",
+			btn_add_sub: "Add Subscription",
+			sub_name_ph: "Subscription Name (e.g. SG-Node-01)",
+			sub_url_ph: "Subscription URL (https://...)",
+			import_title: "📥 Manual Node Import",
+			import_desc: "Paste raw links directly: supports <code>vless://</code>, <code>tuic://</code>, and <code>hysteria2://</code> formats.",
+			btn_import: "Import & Apply",
+			btn_importing: "Importing...",
+			btn_clear: "Clear",
+			node_list_title: "📋 Active Outbound Nodes",
+			btn_refresh_nodes: "Refresh Nodes 🔄",
+			th_node_name: "Node Tag",
+			th_proto: "Protocol",
+			th_sni: "Domain / SNI",
+			th_path: "Path",
+			th_server: "Outbound IP",
+			loading_nodes: "Loading nodes data...",
+			no_nodes: "No active nodes. Import or sync subscriptions above.",
+			btn_del: "Delete",
+			confirm_del_node: "Are you sure you want to delete node ",
+			confirm_del_sub: "Are you sure you want to delete subscription ",
+			prompt_input_sub: "Please enter a valid subscription URL!",
+			prompt_input_node: "Please paste at least one node link!",
+			success_import: "✔ Import succeeded! Config reloaded.",
+			fail_import: "❌ Import failed",
+			success_sync: "✔ Subscriptions synced! Total nodes: ",
+			fail_sync: "❌ Sync failed: ",
+			status_pending: "Pending"
+		}
+	};
+
+	function setLang(lang) {
+		currentLang = lang;
+		localStorage.setItem('sb_lang', lang);
+		applyLang();
+	}
+
+	function applyLang() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		
+		// Button active style
+		var btnZh = document.getElementById('btn-lang-zh');
+		var btnEn = document.getElementById('btn-lang-en');
+		if (btnZh && btnEn) {
+			if (currentLang === 'zh') {
+				btnZh.style.fontWeight = 'bold';
+				btnZh.style.background = '#0072c6';
+				btnZh.style.color = '#fff';
+				btnEn.style.fontWeight = 'normal';
+				btnEn.style.background = '#f5f5f5';
+				btnEn.style.color = '#333';
+			} else {
+				btnEn.style.fontWeight = 'bold';
+				btnEn.style.background = '#0072c6';
+				btnEn.style.color = '#fff';
+				btnZh.style.fontWeight = 'normal';
+				btnZh.style.background = '#f5f5f5';
+				btnZh.style.color = '#333';
+			}
+		}
+
+		// Update all data-i18n elements
+		var elems = document.querySelectorAll('[data-i18n]');
+		for (var i = 0; i < elems.length; i++) {
+			var key = elems[i].getAttribute('data-i18n');
+			if (d[key]) {
+				elems[i].innerHTML = d[key];
+			}
+		}
+
+		// Update placeholders
+		var subName = document.getElementById('new-sub-name');
+		if (subName) subName.placeholder = d.sub_name_ph;
+		var subUrl = document.getElementById('new-sub-url');
+		if (subUrl) subUrl.placeholder = d.sub_url_ph;
+
+		checkStatus();
+		loadSubs();
+		loadNodes();
+	}
+
+	function switchTab(tab) {
+		var tabs = ['subs', 'nodes', 'dashboard'];
+		for (var i = 0; i < tabs.length; i++) {
+			var t = tabs[i];
+			var btn = document.getElementById("tab-btn-" + t);
+			var cnt = document.getElementById("tab-content-" + t);
+			if (t === tab) {
+				btn.style.background = "#0072c6";
+				btn.style.color = "#fff";
+				btn.style.borderColor = "#0072c6";
+				cnt.style.display = "block";
+			} else {
+				btn.style.background = "#f5f5f5";
+				btn.style.color = "#555";
+				btn.style.borderColor = "#d9d9d9";
+				cnt.style.display = "none";
+			}
+		}
+		if (tab === 'dashboard') {
+			var iframe = document.getElementById("singbox-ui");
+			if (!iframe.src || iframe.src === "about:blank") {
+				iframe.src = "/singbox/";
+			}
+		}
+	}
+
+	function checkStatus() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var xhr = new XMLHttpRequest();
+		xhr.open("GET", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "status")%>', true);
+		xhr.onload = function() {
+			if (xhr.status === 200) {
+				var res = JSON.parse(xhr.responseText);
+				var el = document.getElementById("sb-status");
+				if (res.running) {
+					el.innerText = d.status_running;
+					el.style.background = "#e6f9e6";
+					el.style.color = "#15803d";
+				} else {
+					el.innerText = d.status_stopped;
+					el.style.background = "#fee2e2";
+					el.style.color = "#b91c1c";
+				}
+			}
+		};
+		xhr.send();
+	}
+
+	function serviceAction(act) {
+		var el = document.getElementById("sb-status");
+		el.innerText = "...";
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "service")%>', true);
+		xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+		xhr.onload = function() {
+			setTimeout(checkStatus, 1500);
+		};
+		xhr.send("act=" + act);
+	}
+
+	function loadSubs() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var tbody = document.getElementById("sub-list-body");
+		var xhr = new XMLHttpRequest();
+		xhr.open("GET", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "subs")%>', true);
+		xhr.onload = function() {
+			if (xhr.status === 200) {
+				try {
+					var res = JSON.parse(xhr.responseText);
+					if (res.success && res.subscriptions) {
+						if (res.subscriptions.length === 0) {
+							tbody.innerHTML = '<tr><td colspan="4" style="padding: 15px; text-align: center; color: #888;">' + d.no_subs + '</td></tr>';
+							return;
+						}
+						var html = "";
+						for (var i = 0; i < res.subscriptions.length; i++) {
+							var s = res.subscriptions[i];
+							html += '<tr style="border-bottom: 1px solid #edf2f7;">';
+							html += '<td style="padding: 10px; font-weight: bold; color: #0f172a;">' + escapeHtml(s.name) + '</td>';
+							html += '<td style="padding: 10px; font-family: monospace; font-size: 12px; color: #2563eb; word-break: break-all;">' + escapeHtml(s.url) + '</td>';
+							html += '<td style="padding: 10px; font-size: 12px; color: #64748b;">' + (s.last_update ? escapeHtml(s.last_update) : d.status_pending) + '</td>';
+							html += '<td style="padding: 10px; text-align: center;">';
+							html += '<button class="cbi-button cbi-button-reset" style="padding: 2px 8px; font-size: 12px; cursor: pointer;" onclick="deleteSub(\'' + escapeHtml(s.name) + '\')">' + d.btn_del + '</button>';
+							html += '</td>';
+							html += '</tr>';
+						}
+						tbody.innerHTML = html;
+					}
+				} catch(e) {
+					tbody.innerHTML = '<tr><td colspan="4" style="padding: 15px; text-align: center; color: red;">Error: ' + e + '</td></tr>';
+				}
+			}
+		};
+		xhr.send();
+	}
+
+	function updateSubs() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var btn = document.getElementById("btn-sync-subs");
+		var msg = document.getElementById("sub-msg");
+		btn.disabled = true;
+		btn.innerText = d.btn_syncing;
+		msg.innerText = "...";
+		msg.style.color = "#0284c7";
+
+		var xhr = new XMLHttpRequest();
+		xhr.open("GET", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "sub_update")%>', true);
+		xhr.onload = function() {
+			btn.disabled = false;
+			btn.innerText = d.btn_sync_now;
+			if (xhr.status === 200) {
+				try {
+					var res = JSON.parse(xhr.responseText);
+					if (res.success) {
+						msg.innerText = d.success_sync + res.node_count;
+						msg.style.color = "#16a34a";
+						loadSubs();
+						loadNodes();
+						setTimeout(checkStatus, 1500);
+					} else {
+						msg.innerText = d.fail_sync + (res.error || "Unknown");
+						msg.style.color = "#dc2626";
+					}
+				} catch(e) {
+					msg.innerText = "Error: " + e;
+					msg.style.color = "#dc2626";
+				}
+			} else {
+				msg.innerText = "HTTP " + xhr.status;
+				msg.style.color = "#dc2626";
+			}
+		};
+		xhr.send();
+	}
+
+	function addSub() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var name = document.getElementById("new-sub-name").value.trim();
+		var url = document.getElementById("new-sub-url").value.trim();
+		if (!url) {
+			alert(d.prompt_input_sub);
+			return;
+		}
+		if (!name) name = "Sub-Feed";
+
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "sub_add")%>', true);
+		xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+		xhr.onload = function() {
+			document.getElementById("new-sub-name").value = "";
+			document.getElementById("new-sub-url").value = "";
+			loadSubs();
+			updateSubs();
+		};
+		xhr.send("name=" + encodeURIComponent(name) + "&url=" + encodeURIComponent(url));
+	}
+
+	function deleteSub(name) {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		if (!confirm(d.confirm_del_sub + "[" + name + "]?")) return;
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "sub_del")%>', true);
+		xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+		xhr.onload = function() {
+			loadSubs();
+		};
+		xhr.send("name=" + encodeURIComponent(name));
+	}
+
+	function loadNodes() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var tbody = document.getElementById("node-list-body");
+		var xhr = new XMLHttpRequest();
+		xhr.open("GET", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "nodes")%>', true);
+		xhr.onload = function() {
+			if (xhr.status === 200) {
+				try {
+					var res = JSON.parse(xhr.responseText);
+					if (res.success && res.nodes) {
+						if (res.nodes.length === 0) {
+							tbody.innerHTML = '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #888;">' + d.no_nodes + '</td></tr>';
+							return;
+						}
+						var html = "";
+						for (var i = 0; i < res.nodes.length; i++) {
+							var n = res.nodes[i];
+							html += '<tr style="border-bottom: 1px solid #edf2f7;">';
+							html += '<td style="padding: 10px; font-weight: bold; color: #0f172a;">' + escapeHtml(n.tag) + '</td>';
+							html += '<td style="padding: 10px;"><span style="background: #e2e8f0; color: #334155; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold;">' + n.type.toUpperCase() + '</span></td>';
+							html += '<td style="padding: 10px; font-family: monospace; font-size: 12px; color: #3b82f6;">' + escapeHtml(n.sni || n.host || n.server) + '</td>';
+							html += '<td style="padding: 10px; font-family: monospace; font-size: 12px; color: #64748b;">' + escapeHtml(n.path || "-") + '</td>';
+							html += '<td style="padding: 10px; font-family: monospace; font-size: 12px; color: #475569;">' + escapeHtml(n.server) + '</td>';
+							html += '<td style="padding: 10px; text-align: center;">';
+							html += '<button class="cbi-button cbi-button-reset" style="padding: 2px 8px; font-size: 12px; cursor: pointer;" onclick="deleteNode(\'' + escapeHtml(n.tag) + '\')">' + d.btn_del + '</button>';
+							html += '</td>';
+							html += '</tr>';
+						}
+						tbody.innerHTML = html;
+					}
+				} catch(e) {
+					tbody.innerHTML = '<tr><td colspan="6" style="padding: 15px; text-align: center; color: red;">Error: ' + e + '</td></tr>';
+				}
+			}
+		};
+		xhr.send();
+	}
+
+	function importNodes() {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		var text = document.getElementById("import-links").value.trim();
+		var msg = document.getElementById("import-msg");
+		var btn = document.getElementById("btn-import");
+		if (!text) {
+			msg.innerText = d.prompt_input_node;
+			msg.style.color = "#dc2626";
+			return;
+		}
+
+		btn.disabled = true;
+		btn.innerText = d.btn_importing;
+		msg.innerText = "...";
+		msg.style.color = "#0284c7";
+
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "add_node")%>', true);
+		xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+		xhr.onload = function() {
+			btn.disabled = false;
+			btn.innerText = d.btn_import;
+			if (xhr.status === 200) {
+				try {
+					var res = JSON.parse(xhr.responseText);
+					if (res.success) {
+						msg.innerText = d.success_import;
+						msg.style.color = "#16a34a";
+						document.getElementById("import-links").value = "";
+						loadNodes();
+						setTimeout(checkStatus, 1500);
+					} else {
+						msg.innerText = d.fail_import;
+						msg.style.color = "#dc2626";
+					}
+				} catch(e) {
+					msg.innerText = "Error: " + e;
+					msg.style.color = "#dc2626";
+				}
+			}
+		};
+		xhr.send("links=" + encodeURIComponent(text));
+	}
+
+	function deleteNode(tag) {
+		var d = i18nData[currentLang] || i18nData['zh'];
+		if (!confirm(d.confirm_del_node + "[" + tag + "]?")) return;
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", '<%=luci.dispatcher.build_url("admin", "services", "singbox", "del_node")%>', true);
+		xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+		xhr.onload = function() {
+			loadNodes();
+			setTimeout(checkStatus, 1500);
+		};
+		xhr.send("tag=" + encodeURIComponent(tag));
+	}
+
+	function escapeHtml(str) {
+		if (!str) return "";
+		return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+	}
+
+	window.onload = function() {
+		applyLang();
+	};
+</script>
+<%+footer%>
