@@ -159,6 +159,19 @@ chmod +x install.sh
 
 ---
 
+## 🧪 诊断与测试工具集 (`py/`)
+
+项目内置了安全、免密的 Python 状态检测与单元测试脚本，方便开发者与用户快速验证软路由环境：
+
+- **`py/test_ssh_status.py`**：测试路由器 SSH 连通性、系统负载、Sing-Box 运行状态、TUN0 网卡及境内外出海网络连通性（支持安全交互式输入密码）。
+- **`py/test_clash_api.py`**：测试 Sing-Box 内置 Clash RESTful API（默认端口 9090），获取代理节点及历史延迟。
+- **`py/test_luci_api.py`**：模拟测试 LuCI 后台 Web 控制器状态与节点 API 响应。
+- **`py/test_subscription_parser.py`**：本地单元测试 VLESS/TUIC/Hysteria2 节点 URL 参数解析与 Base64 订阅解码逻辑。
+
+> **安全提示**：所有脚本均不含任何硬编码凭据，支持通过交互式输入或命令行参数传参，杜绝敏感凭据泄露风险。详细说明请参考 [`py/README.md`](py/README.md)。
+
+---
+
 ## 💬 问题反馈 (Issues)
 
 如果您在使用过程中遇到任何问题、发现 Bug 或有新的功能建议，欢迎前往 GitHub 提交反馈：
@@ -327,6 +340,19 @@ Once installed, access your router control panel:
   /etc/init.d/sing-box restart  # Restart proxy service
   /etc/init.d/sing-box status   # Check status
   ```
+
+---
+
+## 🧪 Testing & Diagnostic Tools (`py/`)
+
+A dedicated suite of non-credentialed Python diagnostic scripts is provided under the [`py/`](py/) directory:
+
+- **`py/test_ssh_status.py`**: Validates SSH connection, CPU load, Sing-Box daemon status, TUN0 interface, and domestic/international connectivity (interactive prompt for credentials).
+- **`py/test_clash_api.py`**: Queries the built-in Clash RESTful API (default port 9090) to list proxies and latencies.
+- **`py/test_luci_api.py`**: Tests LuCI controller endpoints and JSON responses.
+- **`py/test_subscription_parser.py`**: Offline unit tests for Base64 subscription decoding and VLESS/TUIC/Hysteria2 node URL parsing.
+
+> **Security Notice**: None of the scripts hardcode passwords or sensitive tokens. Refer to [`py/README.md`](py/README.md) for full usage instructions.
 
 ---
 

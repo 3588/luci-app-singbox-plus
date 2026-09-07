@@ -74,6 +74,12 @@ E:\code\luci-app-singbox-plus/
 ├── build_ipk.py                                # 标准 OpenWrt .ipk 自动化打包程序
 ├── dist/
 │   └── luci-app-singbox-plus_1.0.0-1_all.ipk  # 网页端可直接上传的安装包 (约 51 KB)
+├── py/                                         # 诊断与测试脚本工具集 (免密/安全设计)
+│   ├── README.md                               # 测试工具使用说明与安全规范
+│   ├── test_ssh_status.py                      # 路由器 SSH 状态与出海连通性测试
+│   ├── test_clash_api.py                       # Sing-Box Clash API 延迟与节点测试
+│   ├── test_luci_api.py                        # LuCI Web 控制器接口测试
+│   └── test_subscription_parser.py            # 节点解析与 Base64 解码单元测试
 ├── install.sh                                  # 路由器端一键安装脚本
 ├── uninstall.sh                                # 一键卸载与清理脚本
 ├── .gitignore                                  # Git 忽略配置
